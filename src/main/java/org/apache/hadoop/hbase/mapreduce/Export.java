@@ -20,6 +20,14 @@
 package org.apache.hadoop.hbase.mapreduce;
 
 import java.io.IOException;
+import java.util.Date;
+
+import static java.util.Arrays.*;
+
+import joptsimple.OptionParser;
+import joptsimple.OptionSet;
+import joptsimple.OptionSpec;
+import static joptsimple.util.DateConverter.*;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
@@ -39,7 +47,16 @@ import org.mortbay.log.Log;
  * back in again.
  */
 public class Export {
+  
   final static String NAME = "export";
+
+  private static String tableName = null;
+  private static String outputDir = null;
+  private static Integer maxVersions = null;
+  private static Long startTime = null;
+  private static Long endTime = null;
+  private static Integer caching = null;
+  private static Boolean compress = null;
 
   /**
    * Mapper.
@@ -51,7 +68,7 @@ public class Export {
      * @param value  The columns.
      * @param context  The current context.
      * @throws IOException When something is broken with the data.
-     * @see org.apache.hadoop.mapreduce.Mapper#map(KEYIN, VALUEIN,
+     * @see org.apache.hadoop.mapreduce.Mapper#map(KEYIN, VALUEIN, 
      *   org.apache.hadoop.mapreduce.Mapper.Context)
      */
     @Override
@@ -68,65 +85,115 @@ public class Export {
 
   /**
    * Sets up the actual job.
-   *
+   * 
    * @param conf  The current configuration.
-   * @param args  The command line parameters.
    * @return The newly created job.
    * @throws IOException When setting up the job fails.
    */
-  public static Job createSubmittableJob(Configuration conf, String[] args)
+  public static Job createSubmittableJob(Configuration conf)
   throws IOException {
-    String tableName = args[0];
-    Path outputDir = new Path(args[1]);
+    Path outputPath = new Path(outputDir);
     Job job = new Job(conf, NAME + "_" + tableName);
     job.setJobName(NAME + "_" + tableName);
     job.setJarByClass(Exporter.class);
     // TODO: Allow passing filter and subset of rows/columns.
-    Scan s = new Scan();
+    Scan scan = new Scan();
     // Optional arguments.
-    int versions = args.length > 2? Integer.parseInt(args[2]): 1;
-    s.setMaxVersions(versions);
-    long startTime = args.length > 3? Long.parseLong(args[3]): 0L;
-    long endTime = args.length > 4? Long.parseLong(args[4]): Long.MAX_VALUE;
-    s.setTimeRange(startTime, endTime);
-    Log.info("verisons=" + versions + ", starttime=" + startTime +
-      ", endtime=" + endTime);
-    TableMapReduceUtil.initTableMapperJob(tableName, s, Exporter.class, null,
-      null, job);
+    int versions = maxVersions != null ? maxVersions.intValue() : 1;
+    scan.setMaxVersions(versions);
+    long startRange = startTime != null ? startTime.longValue() : 0L;
+    long endRange = endTime != null ? endTime.longValue() : Long.MAX_VALUE;
+    scan.setTimeRange(startRange, endRange);
+    if (caching != null) {
+      scan.setCaching(caching.intValue());
+    }
+    Log.info("versions=" + versions + ", starttime=" + startRange +
+      ", endtime=" + endRange + ", caching=" + caching + ", compress=" +
+      compress);
+    TableMapReduceUtil.initTableMapperJob(tableName, scan, Exporter.class,
+      null, null, job);
     // No reducers.  Just write straight to output files.
     job.setNumReduceTasks(0);
     job.setOutputFormatClass(SequenceFileOutputFormat.class);
     job.setOutputKeyClass(ImmutableBytesWritable.class);
     job.setOutputValueClass(Result.class);
-    FileOutputFormat.setOutputPath(job, outputDir);
+    FileOutputFormat.setOutputPath(job, outputPath);
+    if (compress != null && compress.booleanValue()) {
+      FileOutputFormat.setCompressOutput(job, true);
+      FileOutputFormat.setOutputCompressorClass(job,
+        org.apache.hadoop.io.compress.GzipCodec.class);
+    }
     return job;
   }
 
-  /*
-   * @param errorMsg Error message.  Can be null.
+  /**
+   * Parses the command line arguments.
+   *
+   * @param args  The command line arguments.
+   * @return The parsed options as an OptionSet.
    */
-  private static void usage(final String errorMsg) {
-    if (errorMsg != null && errorMsg.length() > 0) {
-      System.err.println("ERROR: " + errorMsg);
+  private static void parseArgs(String[] args) throws IOException {
+    OptionParser parser = new OptionParser();
+    OptionSpec<String> osTableName = parser.acceptsAll(
+      asList("t", "tablename"), "Table name").withRequiredArg();
+    OptionSpec<String> osOutputDir = parser.acceptsAll(
+      asList("o", "outputdir"), "Output directory").withRequiredArg();
+    OptionSpec<Integer> osMaxVersions = parser.acceptsAll(
+      asList("n", "versions"), "Maximum versions").
+      withRequiredArg().ofType(Integer.class);
+    OptionSpec<Long> osStartTime = parser.acceptsAll(
+      asList("s", "starttime"), "Start time as long value").
+      withRequiredArg().ofType(Long.class);
+    OptionSpec<Long> osEndTime = parser.acceptsAll(
+      asList("e", "endtime"), "End time as long value").
+      withRequiredArg().ofType(Long.class);
+    OptionSpec<Date> osStartDate = parser.accepts("startdate",
+      "Start date (alternative to --starttime)").
+      withRequiredArg().withValuesConvertedBy(datePattern("yyyyMMddHHmm"));
+    OptionSpec<Date> osEndDate = parser.accepts("enddate",
+      "End date (alternative to --endtime)").
+      withRequiredArg().withValuesConvertedBy(datePattern("yyyyMMddHHmm"));
+    OptionSpec<Integer> osCaching = parser.acceptsAll(
+      asList("c", "caching"), "Number of rows for caching").
+      withRequiredArg().ofType(Integer.class);
+    OptionSpec osCompress = parser.acceptsAll(asList("z", "compress"),
+      "Enable compression of output files");
+    OptionSpec osHelp = parser.acceptsAll(asList( "h", "?", "help"),
+      "Show this help");
+    OptionSet options = parser.parse(args);
+    // check if help was invoked or params are missing
+    if (!options.has(osTableName) || !options.has(osOutputDir) ||
+         options.has(osHelp)) {
+      parser.printHelpOn(System.out);
+      System.exit(options.has(osHelp) ? 0 : -1);
     }
-    System.err.println("Usage: Export <tablename> <outputdir> [<versions> " +
-      "[<starttime> [<endtime>]]]");
+    // Get everything needed later
+    tableName = osTableName.value(options);
+    outputDir = osOutputDir.value(options);
+    maxVersions = osMaxVersions.value(options);
+    startTime = osStartTime.value(options);
+    if (options.has(osStartDate)) {
+      startTime = osStartDate.value(options).getTime();
+    }
+    endTime = osEndTime.value(options);
+    if (options.has(osEndDate)) {
+      endTime = osEndDate.value(options).getTime();
+    }
+    caching = osCaching.value(options);
+    compress = options.has(osCompress);
   }
 
   /**
    * Main entry point.
-   *
+   * 
    * @param args  The command line parameters.
    * @throws Exception When running the job fails.
    */
   public static void main(String[] args) throws Exception {
     Configuration conf = HBaseConfiguration.create();
     String[] otherArgs = new GenericOptionsParser(conf, args).getRemainingArgs();
-    if (otherArgs.length < 2) {
-      usage("Wrong number of arguments: " + otherArgs.length);
-      System.exit(-1);
-    }
-    Job job = createSubmittableJob(conf, otherArgs);
+    parseArgs(otherArgs);
+    Job job = createSubmittableJob(conf);
     System.exit(job.waitForCompletion(true)? 0 : 1);
   }
 }
