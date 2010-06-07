@@ -1032,6 +1032,9 @@ public class HMaster extends Thread implements HConstants, HMasterInterface,
   public ClusterStatus getClusterStatus() {
     ClusterStatus status = new ClusterStatus();
     status.setHBaseVersion(VersionInfo.getVersion());
+    HServerAddress hsa = zooKeeperWrapper.readMasterAddress(null);
+    status.setActiveMaster(hsa != null && hsa.getBindAddress() != null ?
+      hsa.getBindAddress() : "");
     status.setServerInfo(serverManager.getServersToServerInfo().values());
     status.setDeadServers(serverManager.getDeadServers());
     status.setRegionsInTransition(this.regionManager.getRegionsInTransition());

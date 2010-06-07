@@ -20,6 +20,7 @@
 
 package org.apache.hadoop.hbase.util;
 
+import org.apache.hadoop.hbase.master.HMaster;
 import org.apache.hadoop.http.HttpServer;
 import org.mortbay.jetty.handler.ContextHandlerCollection;
 import org.mortbay.jetty.servlet.Context;
@@ -52,6 +53,9 @@ public class InfoServer extends HttpServer {
   throws IOException {
     super(name, bindAddress, port, findPort);
     webServer.addHandler(new ContextHandlerCollection());
+    if (HMaster.MASTER.equals(name)) {
+      addFilter("master-locator", MasterLocatorFilter.class.getName(), null);
+    }
   }
 
   protected void addDefaultApps(ContextHandlerCollection parent, String appDir)

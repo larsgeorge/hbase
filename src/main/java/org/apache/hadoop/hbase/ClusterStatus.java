@@ -30,13 +30,14 @@ import java.util.Map;
 import java.util.NavigableMap;
 import java.util.TreeMap;
 
-import org.apache.hadoop.io.VersionedWritable;
+import org.apache.hadoop.io.Writable;
 
 /**
  * Status information on the HBase cluster.
  * <p>
  * <tt>ClusterStatus</tt> provides clients with information such as:
  * <ul>
+ * <li>The IP address of the currently active master.</li>
  * <li>The count and names of region servers in the cluster.</li>
  * <li>The count and names of dead region servers in the cluster.</li>
  * <li>The average cluster load.</li>
@@ -47,10 +48,9 @@ import org.apache.hadoop.io.VersionedWritable;
  *  <li>Regions in transition at master</li>
  * </ul>
  */
-public class ClusterStatus extends VersionedWritable {
-  private static final byte VERSION = 0;
-
+public class ClusterStatus implements Writable {
   private String hbaseVersion;
+  private String activeMaster;
   private Collection<HServerInfo> liveServerInfo;
   private Collection<String> deadServers;
   private NavigableMap<String, String> intransition;
@@ -140,7 +140,7 @@ public class ClusterStatus extends VersionedWritable {
     if (!(o instanceof ClusterStatus)) {
       return false;
     }
-    return (getVersion() == ((ClusterStatus)o).getVersion()) &&
+    return getActiveMaster().equals(((ClusterStatus)o).getActiveMaster()) &&
       getHBaseVersion().equals(((ClusterStatus)o).getHBaseVersion()) &&
       liveServerInfo.equals(((ClusterStatus)o).liveServerInfo) &&
       deadServers.equals(((ClusterStatus)o).deadServers);
@@ -150,18 +150,23 @@ public class ClusterStatus extends VersionedWritable {
    * @see java.lang.Object#hashCode()
    */
   public int hashCode() {
-    return VERSION + hbaseVersion.hashCode() + liveServerInfo.hashCode() +
-      deadServers.hashCode();
-  }
-
-  /** @return the object version number */
-  public byte getVersion() {
-    return VERSION;
+    return activeMaster.hashCode() + hbaseVersion.hashCode() +
+      liveServerInfo.hashCode() + deadServers.hashCode();
   }
 
   //
   // Getters
   //
+
+  /**
+   * Returns the IP address of the currently active master as reported
+   * by ZooKeeper.
+   *
+   * @return The IP address of the currently active master.
+   */
+  public String getActiveMaster() {
+    return activeMaster;
+  }
 
   /**
    * Returns detailed region server information: A list of
@@ -177,6 +182,15 @@ public class ClusterStatus extends VersionedWritable {
   //
   // Setters
   //
+
+  /**
+   * Sets the currently active master's IP address.
+   *
+   * @param activeMaster  The new IP address to set.
+   */
+  public void setActiveMaster(String activeMaster) {
+    this.activeMaster = activeMaster;
+  }
 
   public void setServerInfo(Collection<HServerInfo> serverInfo) {
     this.liveServerInfo = serverInfo;
@@ -199,8 +213,8 @@ public class ClusterStatus extends VersionedWritable {
   //
 
   public void write(DataOutput out) throws IOException {
-    super.write(out);
     out.writeUTF(hbaseVersion);
+    out.writeUTF(activeMaster);
     out.writeInt(liveServerInfo.size());
     for (HServerInfo server: liveServerInfo) {
       server.write(out);
@@ -217,8 +231,8 @@ public class ClusterStatus extends VersionedWritable {
   }
 
   public void readFields(DataInput in) throws IOException {
-    super.readFields(in);
     hbaseVersion = in.readUTF();
+    activeMaster = in.readUTF();
     int count = in.readInt();
     liveServerInfo = new ArrayList<HServerInfo>(count);
     for (int i = 0; i < count; i++) {
